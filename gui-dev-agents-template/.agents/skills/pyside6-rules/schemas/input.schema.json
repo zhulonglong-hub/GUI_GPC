@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "pyside6-rulesInput",
+  "description": "Input for PySide6/PyQt6 GUI development rules.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "target": { "type": "string", "description": "Target .py file or directory" },
+    "mode": {
+      "type": "string",
+      "enum": ["review", "implement", "refactor", "thread-audit", "style-audit"],
+      "description": "Operation mode"
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "binding": { "type": "string", "enum": ["pyside6", "pyqt6"], "default": "pyside6" },
+        "platform": { "type": "string", "enum": ["windows", "macos", "linux", "all"] }
+      }
+    }
+  }
+}

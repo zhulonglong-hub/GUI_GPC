@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "react-gui-rulesInput",
+  "description": "Input for React/Electron GUI development rules.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "target": { "type": "string", "description": "Target .tsx/.jsx file or directory" },
+    "mode": {
+      "type": "string",
+      "enum": ["review", "implement", "refactor", "a11y-audit", "perf-audit"],
+      "description": "Operation mode"
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "runtime": { "type": "string", "enum": ["react", "electron", "next", "vite"], "default": "react" },
+        "styling": { "type": "string", "enum": ["css-modules", "styled-components", "tailwind", "css-vars"] }
+      }
+    }
+  }
+}

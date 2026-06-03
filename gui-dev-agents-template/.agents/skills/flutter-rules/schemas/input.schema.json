@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "flutter-rulesInput",
+  "description": "Input for Flutter/Dart GUI development rules.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "target": { "type": "string", "description": "Target .dart file or directory" },
+    "mode": {
+      "type": "string",
+      "enum": ["review", "implement", "refactor", "a11y-audit", "perf-audit"],
+      "description": "Operation mode"
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "state_mgmt": { "type": "string", "enum": ["bloc", "riverpod", "provider", "getx"], "default": "bloc" },
+        "platform": { "type": "string", "enum": ["android", "ios", "web", "desktop", "all"] }
+      }
+    }
+  }
+}

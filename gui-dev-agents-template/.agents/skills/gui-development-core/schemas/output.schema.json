@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "gui-development-coreOutput",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "description": "Whether the skill executed successfully"
+    },
+    "summary": {
+      "type": "string",
+      "description": "Summary of what was done"
+    },
+    "violations": {
+      "type": "array",
+      "description": "List of rule violations found",
+      "items": {
+        "type": "object",
+        "properties": {
+          "rule": { "type": "string" },
+          "severity": { "type": "string", "enum": ["error", "warning", "info"] },
+          "file": { "type": "string" },
+          "line": { "type": "number" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "suggestions": {
+      "type": "array",
+      "description": "Improvement suggestions",
+      "items": { "type": "string" }
+    }
+  }
+}

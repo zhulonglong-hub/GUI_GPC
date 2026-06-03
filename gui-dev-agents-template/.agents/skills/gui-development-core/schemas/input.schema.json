@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "gui-development-coreInput",
+  "description": "Input schema for universal GUI development rules and best practices.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "target": {
+      "type": "string",
+      "description": "Target file, component, or directory to operate on"
+    },
+    "framework": {
+      "type": "string",
+      "description": "GUI framework being used",
+      "enum": ["pyside6", "pyqt6", "tkinter", "react", "electron", "flutter", "tauri", "vue", "svelte", "other"]
+    },
+    "mode": {
+      "type": "string",
+      "description": "Operation mode",
+      "enum": ["review", "implement", "refactor", "accessibility-audit", "performance-audit"]
+    },
+    "options": {
+      "type": "object",
+      "description": "Additional options for skill execution",
+      "additionalProperties": true,
+      "properties": {
+        "platform": {
+          "type": "string",
+          "description": "Target platform",
+          "enum": ["windows", "macos", "linux", "web", "mobile", "cross-platform"]
+        },
+        "strict": {
+          "type": "boolean",
+          "description": "Enable strict mode (fail on warnings)"
+        }
+      }
+    }
+  }
+}

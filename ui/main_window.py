@@ -129,25 +129,26 @@ class MainWindow(QMainWindow):
     
     def create_tabs(self):
         """创建所有功能Tab"""
+        # P1-5: 防护判断 - 索引未就绪时不创建Tab
         if not self.dataset_index:
             return
-        
+
         # 浏览Tab
         self.browse_tab = BrowseTab(self.dataset_index)
         self.tabs.addTab(self.browse_tab, "📷 浏览")
-        
+
         # 统计Tab
         self.stats_tab = StatsTab(self.dataset_index)
         self.tabs.addTab(self.stats_tab, "📊 统计")
-        
+
         # 新增Tab
         self.add_tab = AddTab(self.dataset_index)
         self.tabs.addTab(self.add_tab, "➕ 新增")
-        
+
         # 删除Tab
         self.delete_tab = DeleteTab(self.dataset_index)
         self.tabs.addTab(self.delete_tab, "🗑️ 删除")
-        
+
         # 编辑Tab
         self.edit_tab = EditTab(self.dataset_index)
         self.tabs.addTab(self.edit_tab, "✏️ 编辑")
@@ -169,11 +170,14 @@ class MainWindow(QMainWindow):
             "确定要重新构建索引吗?这可能需要一些时间。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        
+
         if reply == QMessageBox.StandardButton.Yes:
             # 清空当前Tabs
             self.tabs.clear()
-            
+
+            # P1-5: 重置索引状态
+            self.dataset_index = None
+
             # 重新加载索引
             self.load_index()
     

@@ -145,14 +145,15 @@ class BrowseTab(QWidget):
             QMessageBox.warning(self, "错误", f"无法加载完整记录: {task_id}")
     
     def load_full_record(self, task_id: str, split: str) -> dict:
-        """加载包含Polygons的完整记录"""
-        # 构建偏移量索引 (如果还没有)
-        if split not in self.offset_indices:
-            cache_path = CACHE_DIR / f"offset_index_{split}.pkl"
-            # 这里简化:直接流式查找
-            for record in stream_records(get_refer_json(split)):
-                if record.get('task_id') == task_id:
-                    return record
+        """
+        加载包含Polygons的完整记录
+
+        P1-3: 修复逻辑Bug - 原代码 if 分支里 return，导致 else 永远返回 None
+        """
+        # 简化实现：直接流式查找（Phase 2 会改为偏移量索引）
+        for record in stream_records(get_refer_json(split)):
+            if record.get('task_id') == task_id:
+                return record
 
         return None
 

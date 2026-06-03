@@ -64,8 +64,9 @@ class DatasetIndex:
         task_id = record.get('task_id')
         if not task_id:
             return
-        
-        image_id = record.get('image_id', '')
+
+        # P1-6: 确保 image_id 为字符串类型（防止 JSON 中是数字）
+        image_id = str(record.get('image_id', '')) if record.get('image_id') else ''
         phrase_struct = record.get('phrase_structure', {})
         name = phrase_struct.get('name', '')
         attributes = phrase_struct.get('attributes', [])
@@ -118,9 +119,10 @@ class DatasetIndex:
             if query in self.by_image:
                 results = self.by_image[query]
             else:
-                # 前缀匹配
+                # P1-6: 前缀匹配 - 确保 img_id 为字符串类型
                 for img_id in self.by_image:
-                    if img_id.startswith(query):
+                    img_id_str = str(img_id)  # 转为字符串
+                    if img_id_str.startswith(query):
                         results.extend(self.by_image[img_id])
         
         elif by == 'name':
@@ -207,11 +209,18 @@ class DatasetIndex:
         for key in self.stats:
             self.stats[key] = 0
 
-    def save_cache(self, cache_path: Path) -> bool:
-        """保存索引到缓存文件"""
+    def save_cache(self, cache_path: Path, dataset_root: Path) -> bool:
+        """
+        保存索引到缓存文件
+
+        Args:
+            cache_path: 缓存文件路径
+            dataset_root: 数据集根目录（用于校验缓存有效性）
+        """
         try:
             with open(cache_path, 'wb') as f:
                 pickle.dump({
+                    'dataset_root': str(dataset_root),  # P1-1: 绑定数据集路径
                     'main': self.main,
                     'by_image': self.by_image,
                     'by_name': self.by_name,
@@ -222,14 +231,29 @@ class DatasetIndex:
             print(f"保存索引缓存失败: {e}")
             return False
 
-    def load_cache(self, cache_path: Path) -> bool:
-        """从缓存加载索引"""
+    def load_cache(self, cache_path: Path, dataset_root: Path) -> bool:
+        """
+        从缓存加载索引
+
+        Args:
+            cache_path: 缓存文件路径
+            dataset_root: 当前数据集根目录
+
+        Returns:
+            是否成功加载（校验失败返回False）
+        """
         if not cache_path.exists():
             return False
 
         try:
             with open(cache_path, 'rb') as f:
                 data = pickle.load(f)
+
+            # P1-1: 校验数据集路径，不一致则视为缓存失效
+            cached_root = data.get('dataset_root', '')
+            if cached_root != str(dataset_root):
+                print(f"缓存失效: 数据集路径已变更 {cached_root} -> {dataset_root}")
+                return False
 
             self.main = data['main']
             self.by_image = data['by_image']
@@ -243,7 +267,7 @@ class DatasetIndex:
 
 
 if __name__ == "__main__":
-    from config import ANNOTATIONS_DIR
+    from config import ANNOTATIONS_DIR, DATASET_ROOT
 
     print("构建索引...")
     index = DatasetIndex()

@@ -7,55 +7,59 @@ GPC Dataset Manager - 索引构建工作线程
 import sys
 from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
+import hashlib
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.dataset_index import DatasetIndex
-from config import ANNOTATIONS_DIR, CACHE_DIR
+from config import ANNOTATIONS_DIR, CACHE_DIR, DATASET_ROOT
 
 
 class IndexBuilder(QThread):
     """后台索引构建线程"""
-    
+
     # 信号定义
     progress_updated = pyqtSignal(int, int)  # 已处理, 总计
     index_ready = pyqtSignal(object)  # DatasetIndex对象
     error_occurred = pyqtSignal(str)  # 错误消息
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._cancelled = False
-        self.cache_path = CACHE_DIR / "dataset_index.pkl"
+
+        # P1-2: 缓存文件名包含数据集路径哈希，实现多数据集隔离
+        dataset_hash = hashlib.md5(str(DATASET_ROOT).encode()).hexdigest()[:8]
+        self.cache_path = CACHE_DIR / f"dataset_index_{dataset_hash}.pkl"
     
     def run(self):
         """线程主函数"""
         try:
             index = DatasetIndex()
-            
-            # 尝试从缓存加载
-            if index.load_cache(self.cache_path):
+
+            # P1-2: 传入 DATASET_ROOT 用于缓存校验
+            if index.load_cache(self.cache_path, DATASET_ROOT):
                 self.progress_updated.emit(100, 100)
                 self.index_ready.emit(index)
                 return
-            
+
             # 全量构建
             self.progress_updated.emit(0, 100)
-            
+
             if self._cancelled:
                 return
-            
+
             index.build(ANNOTATIONS_DIR)
-            
+
             if self._cancelled:
                 return
-            
+
             self.progress_updated.emit(100, 100)
-            
-            # 保存缓存
-            index.save_cache(self.cache_path)
-            
+
+            # P1-2: 保存时传入 DATASET_ROOT
+            index.save_cache(self.cache_path, DATASET_ROOT)
+
             # 发送就绪信号
             self.index_ready.emit(index)
-            
+
         except Exception as e:
             self.error_occurred.emit(f"索引构建失败: {str(e)}")
     

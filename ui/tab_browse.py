@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from ui.widgets.image_canvas import ImageCanvas
 from ui.widgets.phrase_panel import PhrasePanel
 from workers.image_loader import ImageLoader
-from core.json_io import stream_records, build_offset_index, read_record_at_offset
+from workers.record_loader import RecordLoader  # P2-4: 新增
 from config import get_refer_json, CACHE_DIR
 
 
@@ -26,6 +26,7 @@ class BrowseTab(QWidget):
         super().__init__(parent)
         self.dataset_index = dataset_index
         self.current_image_loader = None
+        self.current_record_loader = None  # P2-4: 新增记录加载线程
         self.offset_indices = {}  # split -> offset_index
         self.init_ui()
     
@@ -119,38 +120,72 @@ class BrowseTab(QWidget):
         self.result_label.setText(f"搜索结果: {len(results)} 条 (显示前 {min(len(results), 1000)} 条)")
     
     def on_item_selected(self, item):
-        """列表项选中时触发"""
+        """
+        列表项选中时触发
+
+        P2-4: 改为异步加载，立即显示"加载中"状态
+        """
         task_id = item.data(Qt.ItemDataRole.UserRole)
         if not task_id:
             return
-        
+
         meta = self.dataset_index.get_meta(task_id)
         if not meta:
             return
-        
+
         image_id = meta['image_id']
         split = meta['split']
-        
-        # 加载完整记录 (含Polygons)
-        full_record = self.load_full_record(task_id, split)
-        
-        if full_record:
-            # 显示字段
-            full_record['split'] = split  # 添加split信息
-            self.phrase_panel.display_record(full_record)
-            
-            # 异步加载图像
-            self.load_and_render_image(image_id, [full_record])
-        else:
-            QMessageBox.warning(self, "错误", f"无法加载完整记录: {task_id}")
+
+        # P2-4: 立即显示"加载中"状态
+        self.canvas.clear()
+        self.canvas.ax.text(0.5, 0.5, '⏳ 加载记录中，请稍候...',
+                           ha='center', va='center', fontsize=14,
+                           transform=self.canvas.ax.transAxes,
+                           color='#2196F3')
+        self.canvas.draw()
+
+        self.phrase_panel.clear()
+
+        # P2-4: 取消之前的加载任务
+        if self.current_record_loader and self.current_record_loader.isRunning():
+            self.current_record_loader.cancel()
+            self.current_record_loader.wait(100)  # 等待最多100ms
+
+        # P2-4: 创建新的异步加载任务
+        self.current_record_loader = RecordLoader(task_id, split)
+        self.current_record_loader.record_loaded.connect(
+            lambda record: self.on_record_loaded(record, image_id)
+        )
+        self.current_record_loader.error_occurred.connect(self.on_record_error)
+        self.current_record_loader.start()
     
+    def on_record_loaded(self, record: dict, image_id: str):
+        """
+        P2-4: 记录加载完成的回调
+        """
+        # 显示字段详情
+        self.phrase_panel.display_record(record)
+
+        # 异步加载图像
+        self.load_and_render_image(image_id, [record])
+
+    def on_record_error(self, error_msg: str):
+        """
+        P2-4: 记录加载失败的回调
+        """
+        QMessageBox.warning(self, "错误", f"无法加载完整记录:\n{error_msg}")
+
+        # 恢复占位符
+        self.canvas.clear()
+
     def load_full_record(self, task_id: str, split: str) -> dict:
         """
         加载包含Polygons的完整记录
 
-        P1-3: 修复逻辑Bug - 原代码 if 分支里 return，导致 else 永远返回 None
+        P2-4: 此方法已废弃，保留用于兼容性
         """
         # 简化实现：直接流式查找（Phase 2 会改为偏移量索引）
+        from core.json_io import stream_records
         for record in stream_records(get_refer_json(split)):
             if record.get('task_id') == task_id:
                 return record

@@ -12,32 +12,52 @@ from typing import Generator, Optional, Callable, Dict
 import shutil
 from datetime import datetime
 from filelock import FileLock
+try:
+    import ijson
+    IJSON_AVAILABLE = True
+except ImportError:
+    IJSON_AVAILABLE = False
+    print("警告: ijson 未安装，将使用低效的全量加载模式")
 
 
 def stream_records(json_path: Path) -> Generator[dict, None, None]:
     """
     流式读取JSON数组文件,逐条yield记录
-    
+
+    P2-1: 使用 ijson 实现真正的流式解析，避免全量加载
+
     Args:
         json_path: JSON文件路径
-    
+
     Yields:
         单条记录字典
     """
     if not json_path.exists():
         return
-    
-    with open(json_path, 'r', encoding='utf-8') as f:
-        content = f.read(1)
-        if content != '[':
-            raise ValueError(f"{json_path} 不是JSON数组格式")
-        
-        f.seek(0)
-        data = json.load(f)
-        
-        if isinstance(data, list):
-            for record in data:
-                yield record
+
+    if IJSON_AVAILABLE:
+        # P2-1: 真流式解析
+        try:
+            with open(json_path, 'rb') as f:
+                # ijson.items() 逐条解析数组元素
+                parser = ijson.items(f, 'item')
+                for record in parser:
+                    yield record
+        except Exception as e:
+            print(f"ijson 解析失败 {json_path}: {e}，回退到全量加载")
+            # 回退到旧方法
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    for record in data:
+                        yield record
+    else:
+        # 回退：全量加载（兼容 ijson 未安装的情况）
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                for record in data:
+                    yield record
 
 
 def build_offset_index(json_path: Path) -> Dict[str, int]:

@@ -9,22 +9,25 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
                              QLineEdit, QPushButton, QComboBox, QTextEdit,
                              QFileDialog, QMessageBox, QLabel, QGroupBox)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 import json
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from core.writer import add_record
+from workers.write_worker import WriteWorker  # P2-8: 新增异步写操作
 from core.validator import validate_import_data
 from core.polygon_utils import bbox_to_polygon
 
 
 class AddTab(QWidget):
     """新增样本Tab"""
+
+    record_added = pyqtSignal(dict)
     
     def __init__(self, dataset_index, parent=None):
         super().__init__(parent)
         self.dataset_index = dataset_index
         self.selected_image_path = None
+        self._write_worker = None  # P2-8: 写操作线程
         self.init_ui()
     
     def init_ui(self):
@@ -105,16 +108,17 @@ class AddTab(QWidget):
         # 操作按钮
         button_layout = QHBoxLayout()
         button_layout.addStretch()
-        
+
         preview_btn = QPushButton("预览")
         preview_btn.clicked.connect(self.preview_record)
         button_layout.addWidget(preview_btn)
-        
-        submit_btn = QPushButton("✅ 提交新增")
-        submit_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 8px;")
-        submit_btn.clicked.connect(self.submit_record)
-        button_layout.addWidget(submit_btn)
-        
+
+        # P2-8: 保存为实例属性
+        self.submit_btn = QPushButton("✅ 提交新增")
+        self.submit_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 8px;")
+        self.submit_btn.clicked.connect(self.submit_record)
+        button_layout.addWidget(self.submit_btn)
+
         clear_btn = QPushButton("清空")
         clear_btn.clicked.connect(self.clear_form)
         button_layout.addWidget(clear_btn)
@@ -170,7 +174,11 @@ class AddTab(QWidget):
             QMessageBox.warning(self, "错误", f"预览失败: {e}")
 
     def submit_record(self):
-        """提交新增记录"""
+        """
+        提交新增记录
+
+        P2-8: 改为异步执行，避免 append_record 在主线程导致卡顿
+        """
         # 验证输入
         if not self.selected_image_path:
             QMessageBox.warning(self, "警告", "请先选择图像文件")
@@ -199,34 +207,68 @@ class AddTab(QWidget):
             name = self.name_input.text().strip()
             split = self.split_combo.currentText()
 
-            # 添加记录
-            task_id = add_record(
-                img_src_path=self.selected_image_path,
-                polygons=polygons,
-                name=name,
-                attributes=attributes,
-                relations=relations,
-                split=split,
-                dry_run=False
-            )
+            # P2-8: 禁用按钮
+            self.submit_btn.setEnabled(False)
+            self.image_path_label.setText("⏳ 正在提交新增...")
+            self.image_path_label.setStyleSheet("color: #2196F3;")
 
-            # 更新索引
-            self.dataset_index.add_entry({
-                'task_id': task_id,
+            # P2-8: 暂存数据用于索引更新
+            self._pending_add = {
                 'image_id': self.selected_image_path.stem,
                 'split': split,
                 'name': name,
                 'attributes': attributes,
                 'phrase': ' '.join(attributes + [name] + relations)
+            }
+
+            # P2-8: 创建后台写操作
+            self._write_worker = WriteWorker('add', {
+                'img_src_path': self.selected_image_path,
+                'polygons': polygons,
+                'name': name,
+                'attributes': attributes,
+                'relations': relations,
+                'split': split,
+                'dry_run': False
             })
-
-            QMessageBox.information(self, "成功", f"成功添加记录!\ntask_id: {task_id}")
-
-            # 清空表单
-            self.clear_form()
+            self._write_worker.progress_updated.connect(
+                lambda msg: self.image_path_label.setText(f"⏳ {msg}")
+            )
+            self._write_worker.finished.connect(self.on_add_finished)
+            self._write_worker.error_occurred.connect(self.on_add_error)
+            self._write_worker.start()
 
         except Exception as e:
             QMessageBox.critical(self, "错误", f"添加记录失败:\n{str(e)}")
+
+    def on_add_finished(self, result: dict):
+        """P2-8: 新增完成回调"""
+        self.submit_btn.setEnabled(True)
+
+        if result.get('success'):
+            task_id = result.get('task_id', 'unknown')
+            updated_meta = result.get('updated_meta')
+
+            # 更新索引
+            if updated_meta:
+                self.dataset_index.add_entry(updated_meta)
+                self.record_added.emit(updated_meta)
+
+            QMessageBox.information(self, "成功", f"✅ 成功添加记录!\ntask_id: {task_id}")
+
+            # 清空表单
+            self.clear_form()
+        else:
+            self.image_path_label.setText("未选择文件")
+            self.image_path_label.setStyleSheet("color: gray;")
+            QMessageBox.warning(self, "失败", result.get('message', '未知错误'))
+
+    def on_add_error(self, error_msg: str):
+        """P2-8: 新增失败回调"""
+        self.submit_btn.setEnabled(True)
+        self.image_path_label.setText("未选择文件")
+        self.image_path_label.setStyleSheet("color: gray;")
+        QMessageBox.critical(self, "错误", f"添加记录失败:\n{error_msg}")
 
     def clear_form(self):
         """清空表单"""

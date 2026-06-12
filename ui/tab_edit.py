@@ -9,20 +9,25 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
                              QPushButton, QMessageBox, QLabel, QGroupBox,
                              QFormLayout, QComboBox)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from core.writer import update_fields
+from workers.write_worker import WriteWorker  # P2-6: 新增异步写操作
 
 
 class EditTab(QWidget):
     """编辑样本Tab"""
-    
+
+    record_updated = pyqtSignal(str)
+
     def __init__(self, dataset_index, parent=None):
         super().__init__(parent)
         self.dataset_index = dataset_index
         self.current_task_id = None
         self.current_split = None
+        self._write_worker = None       # P2-6: 写操作线程
+        self._pending_updates = None    # P2-6: 暂存待写入字段
+        self._baseline_values = None
         self.init_ui()
     
     def init_ui(self):
@@ -73,22 +78,23 @@ class EditTab(QWidget):
         main_layout.addWidget(edit_group)
         
         # 说明
-        hint_label = QLabel("提示: 只修改需要变更的字段,其他字段留空则保持不变")
+        hint_label = QLabel("提示: 加载后会显示当前值，只会保存实际发生变化的字段")
         hint_label.setStyleSheet("color: #666; font-size: 11px; padding: 5px;")
         main_layout.addWidget(hint_label)
         
         # 操作按钮
         button_layout = QHBoxLayout()
         button_layout.addStretch()
-        
+
         clear_btn = QPushButton("清空")
         clear_btn.clicked.connect(self.clear_form)
         button_layout.addWidget(clear_btn)
-        
-        update_btn = QPushButton("✅ 保存修改")
-        update_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 8px;")
-        update_btn.clicked.connect(self.save_changes)
-        button_layout.addWidget(update_btn)
+
+        # P2-6: 保存为实例属性，以便 on_write_finished 恢复状态
+        self.update_btn = QPushButton("✅ 保存修改")
+        self.update_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 8px;")
+        self.update_btn.clicked.connect(self.save_changes)
+        button_layout.addWidget(self.update_btn)
         
         main_layout.addLayout(button_layout)
         
@@ -124,35 +130,47 @@ class EditTab(QWidget):
         self.current_info_label.setText(info_text)
         self.current_info_label.setStyleSheet("color: black; padding: 10px; background-color: #f0f0f0;")
         
-        # 填充表单 (作为参考)
-        self.phrase_input.setPlaceholderText(meta['phrase'])
-        self.name_input.setPlaceholderText(meta['name'])
-        self.attributes_input.setPlaceholderText(', '.join(meta['attributes']))
+        # 填充表单
+        self.phrase_input.setText(meta['phrase'])
+        self.name_input.setText(meta['name'])
+        self.attributes_input.setText(', '.join(meta['attributes']))
+        self._baseline_values = {
+            'phrase': meta['phrase'],
+            'name': meta['name'],
+            'attributes': list(meta['attributes'])
+        }
     
     def save_changes(self):
-        """保存修改"""
+        """
+        保存修改
+
+        P2-6: 改为异步执行，避免 filter_rewrite 在主线程导致 UI 卡死
+        """
         if not self.current_task_id:
             QMessageBox.warning(self, "警告", "请先加载一条记录")
             return
-        
+
         # 收集修改的字段
         field_updates = {}
-        
-        if self.phrase_input.text().strip():
-            field_updates['phrase'] = self.phrase_input.text().strip()
-        
-        if self.name_input.text().strip():
-            field_updates['name'] = self.name_input.text().strip()
-        
-        if self.attributes_input.text().strip():
-            attributes = [attr.strip() for attr in self.attributes_input.text().split(',')
-                         if attr.strip()]
+        baseline = self._baseline_values or {}
+
+        phrase = self.phrase_input.text().strip()
+        if phrase != baseline.get('phrase', ''):
+            field_updates['phrase'] = phrase
+
+        name = self.name_input.text().strip()
+        if name != baseline.get('name', ''):
+            field_updates['name'] = name
+
+        attributes = [attr.strip() for attr in self.attributes_input.text().split(',')
+                     if attr.strip()]
+        if attributes != baseline.get('attributes', []):
             field_updates['attributes'] = attributes
-        
+
         if not field_updates:
             QMessageBox.warning(self, "警告", "没有任何修改")
             return
-        
+
         # 确认修改
         reply = QMessageBox.question(
             self,
@@ -160,45 +178,65 @@ class EditTab(QWidget):
             f"确定要修改以下字段吗?\n{', '.join(field_updates.keys())}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        
+
         if reply != QMessageBox.StandardButton.Yes:
             return
-        
-        try:
-            # 执行更新
-            result = update_fields(
-                self.current_task_id,
-                self.current_split,
-                field_updates,
-                dry_run=False
-            )
-            
-            if result['success']:
-                # 更新索引
-                meta = self.dataset_index.get_meta(self.current_task_id)
-                if meta:
-                    for field, value in field_updates.items():
-                        if field == 'phrase':
-                            meta['phrase'] = value
-                        elif field == 'name':
-                            meta['name'] = value
-                        elif field == 'attributes':
-                            meta['attributes'] = value
-                    
-                    self.dataset_index.update_entry(self.current_task_id, meta)
-                
-                QMessageBox.information(self, "成功", f"成功更新字段: {', '.join(field_updates.keys())}")
-                
-                # 清空表单
-                self.clear_form()
-            else:
-                QMessageBox.warning(self, "失败", result['message'])
-                
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"更新失败:\n{str(e)}")
+
+        # P2-6: 禁用按钮，防止重复提交
+        self.update_btn.setEnabled(False)
+        self.current_info_label.setText(f"⏳ 正在保存修改...")
+        self.current_info_label.setStyleSheet("color: #2196F3; padding: 10px;")
+
+        # P2-6: 暂存待更新字段（完成后需要同步到索引）
+        self._pending_updates = field_updates
+        self._updated_task_id = self.current_task_id
+
+        # P2-6: 创建后台写操作线程
+        self._write_worker = WriteWorker('update', {
+            'task_id': self.current_task_id,
+            'split': self.current_split,
+            'field_updates': field_updates,
+            'dry_run': False
+        })
+        self._write_worker.progress_updated.connect(self.on_write_progress)
+        self._write_worker.finished.connect(self.on_write_finished)
+        self._write_worker.error_occurred.connect(self.on_write_error)
+        self._write_worker.start()
+
+    def on_write_progress(self, message: str):
+        """P2-6: 写操作进度更新"""
+        self.current_info_label.setText(f"⏳ {message}")
+
+    def on_write_finished(self, result: dict):
+        """P2-6: 写操作完成回调"""
+        self.update_btn.setEnabled(True)
+
+        if result['success']:
+            updated_meta = result.get('updated_meta')
+            updated_task_id = self.current_task_id
+            if updated_meta and updated_task_id:
+                self.dataset_index.update_entry(updated_task_id, updated_meta)
+                self.current_split = updated_meta['split']
+                self.record_updated.emit(updated_task_id)
+                self.search_input.setText(updated_task_id)
+                self.load_record()
+
+            QMessageBox.information(self, "成功", f"✅ {result['message']}")
+        else:
+            self.current_info_label.setText(f"尚未加载记录")
+            self.current_info_label.setStyleSheet("color: gray; padding: 10px;")
+            QMessageBox.warning(self, "失败", result['message'])
+
+    def on_write_error(self, error_msg: str):
+        """P2-6: 写操作失败回调"""
+        self.update_btn.setEnabled(True)
+        self.current_info_label.setText(f"尚未加载记录")
+        self.current_info_label.setStyleSheet("color: gray; padding: 10px;")
+        QMessageBox.critical(self, "错误", f"更新失败:\n{error_msg}")
     
     def clear_form(self):
         """清空表单"""
+        self._baseline_values = None
         self.search_input.clear()
         self.phrase_input.clear()
         self.name_input.clear()

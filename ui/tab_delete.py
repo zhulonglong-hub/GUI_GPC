@@ -9,19 +9,24 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
                              QPushButton, QListWidget, QMessageBox, QLabel,
                              QCheckBox, QGroupBox, QListWidgetItem)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from core.writer import delete_record
+from workers.write_worker import WriteWorker  # P2-7: 新增异步写操作
 
 
 class DeleteTab(QWidget):
     """删除样本Tab"""
+
+    record_deleted = pyqtSignal(str)
     
     def __init__(self, dataset_index, parent=None):
         super().__init__(parent)
         self.dataset_index = dataset_index
-        self.pending_deletions = []  # 待删除的 (task_id, split) 列表
+        self.pending_deletions = []     # 待删除的 (task_id, split) 列表
+        self._write_worker = None       # P2-7: 写操作线程
+        self._delete_queue = []         # P2-7: 批量删除队列
+        self._delete_results = {'success': 0, 'failed': []}  # P2-7: 删除结果
         self.init_ui()
     
     def init_ui(self):
@@ -86,11 +91,12 @@ class DeleteTab(QWidget):
         # 操作按钮
         button_layout = QHBoxLayout()
         button_layout.addStretch()
-        
-        delete_btn = QPushButton("🗑️ 删除选中条目")
-        delete_btn.setStyleSheet("background-color: #f44336; color: white; padding: 8px;")
-        delete_btn.clicked.connect(self.delete_selected)
-        button_layout.addWidget(delete_btn)
+
+        # P2-7: 保存为实例属性
+        self.delete_btn = QPushButton("🗑️ 删除选中条目")
+        self.delete_btn.setStyleSheet("background-color: #f44336; color: white; padding: 8px;")
+        self.delete_btn.clicked.connect(self.delete_selected)
+        button_layout.addWidget(self.delete_btn)
         
         main_layout.addLayout(button_layout)
         
@@ -146,13 +152,17 @@ class DeleteTab(QWidget):
             self.result_list.item(i).setSelected(False)
     
     def delete_selected(self):
-        """删除选中的条目"""
+        """
+        删除选中的条目
+
+        P2-7: 改为异步批量删除，避免 UI 卡死
+        """
         selected_items = self.result_list.selectedItems()
-        
+
         if not selected_items:
             QMessageBox.warning(self, "警告", "请先选择要删除的条目")
             return
-        
+
         # 二次确认
         reply = QMessageBox.question(
             self,
@@ -160,33 +170,88 @@ class DeleteTab(QWidget):
             f"确定要删除 {len(selected_items)} 条记录吗?\n此操作会将记录备份到回收站。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        
+
         if reply != QMessageBox.StandardButton.Yes:
             return
-        
+
+        # P2-7: 禁用按钮，防止重复提交
+        self.delete_btn.setEnabled(False)
+
+        # P2-7: 构建删除队列
+        self._delete_queue = []
         delete_image = self.delete_image_checkbox.isChecked()
-        
-        # 执行删除
-        success_count = 0
-        failed_items = []
-        
+
         for item in selected_items:
             task_id, split = item.data(Qt.ItemDataRole.UserRole)
-            
-            try:
-                result = delete_record(task_id, split, delete_image_file=delete_image)
-                
-                if result['success']:
-                    # 从索引中移除
-                    self.dataset_index.remove_entry(task_id)
-                    success_count += 1
-                else:
-                    failed_items.append(f"{task_id}: {result['message']}")
-                    
-            except Exception as e:
-                failed_items.append(f"{task_id}: {str(e)}")
-        
-        # 显示结果
+            self._delete_queue.append({
+                'task_id': task_id,
+                'split': split,
+                'delete_image_file': delete_image
+            })
+
+        # P2-7: 重置结果计数
+        self._delete_results = {'success': 0, 'failed': []}
+
+        # P2-7: 启动第一个删除任务
+        self._process_next_delete()
+
+    def _process_next_delete(self):
+        """P2-7: 处理队列中的下一个删除任务"""
+        if not self._delete_queue:
+            # 全部完成，显示结果
+            self._show_delete_results()
+            return
+
+        # 取出下一个任务
+        params = self._delete_queue.pop(0)
+        total = len(self._delete_queue) + self._delete_results['success'] + len(self._delete_results['failed']) + 1
+        current = self._delete_results['success'] + len(self._delete_results['failed']) + 1
+
+        # 创建写操作线程
+        self._write_worker = WriteWorker('delete', params)
+        self._write_worker.progress_updated.connect(
+            lambda msg: self._on_delete_progress(current, total, msg)
+        )
+        self._write_worker.finished.connect(
+            lambda result: self._on_delete_finished(params['task_id'], result)
+        )
+        self._write_worker.error_occurred.connect(
+            lambda err: self._on_delete_error(params['task_id'], err)
+        )
+        self._write_worker.start()
+
+    def _on_delete_progress(self, current: int, total: int, message: str):
+        """P2-7: 删除进度更新"""
+        # 这里可以更新进度提示，暂时依赖 QThread 的后台执行
+        pass
+
+    def _on_delete_finished(self, task_id: str, result: dict):
+        """P2-7: 单个删除完成"""
+        if result['success']:
+            # 从索引中移除
+            self.dataset_index.remove_entry(task_id)
+            self.record_deleted.emit(task_id)
+            self._delete_results['success'] += 1
+        else:
+            self._delete_results['failed'].append(f"{task_id}: {result['message']}")
+
+        # 处理下一个
+        self._process_next_delete()
+
+    def _on_delete_error(self, task_id: str, error_msg: str):
+        """P2-7: 单个删除失败"""
+        self._delete_results['failed'].append(f"{task_id}: {error_msg}")
+
+        # 处理下一个
+        self._process_next_delete()
+
+    def _show_delete_results(self):
+        """P2-7: 显示批量删除结果"""
+        self.delete_btn.setEnabled(True)
+
+        success_count = self._delete_results['success']
+        failed_items = self._delete_results['failed']
+
         if failed_items:
             QMessageBox.warning(
                 self,
@@ -194,8 +259,8 @@ class DeleteTab(QWidget):
                 f"成功删除 {success_count} 条\n失败 {len(failed_items)} 条:\n" + '\n'.join(failed_items[:5])
             )
         else:
-            QMessageBox.information(self, "成功", f"成功删除 {success_count} 条记录")
-        
+            QMessageBox.information(self, "成功", f"✅ 成功删除 {success_count} 条记录")
+
         # 清空列表
         self.result_list.clear()
         self.search_input.clear()

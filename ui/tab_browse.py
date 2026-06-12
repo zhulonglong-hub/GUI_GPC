@@ -27,6 +27,8 @@ class BrowseTab(QWidget):
         self.dataset_index = dataset_index
         self.current_image_loader = None
         self.current_record_loader = None  # P2-4: 新增记录加载线程
+        self.current_task_id = None
+        self.current_split = None
         self.offset_indices = {}  # split -> offset_index
         self.init_ui()
     
@@ -92,32 +94,52 @@ class BrowseTab(QWidget):
         
         main_layout.addWidget(splitter)
     
-    def do_search(self):
-        """执行搜索"""
+    def _populate_results(self, results, selected_task_id: str = None) -> None:
+        self.result_list.clear()
+        selected_item = None
+
+        for task_id in results[:1000]:
+            meta = self.dataset_index.get_meta(task_id)
+            if not meta:
+                continue
+
+            display_text = f"{task_id} | {meta['phrase']} | [{meta['split']}]"
+            self.result_list.addItem(display_text)
+            item = self.result_list.item(self.result_list.count() - 1)
+            item.setData(Qt.ItemDataRole.UserRole, task_id)
+            if task_id == selected_task_id:
+                selected_item = item
+
+        self.result_label.setText(f"搜索结果: {len(results)} 条 (显示前 {min(len(results), 1000)} 条)")
+
+        if selected_item:
+            self.result_list.setCurrentItem(selected_item)
+            self.on_item_selected(selected_item)
+        elif selected_task_id == self.current_task_id:
+            self.current_task_id = None
+            self.current_split = None
+            self.phrase_panel.clear()
+            self.canvas.clear()
+
+    def _run_current_search(self):
         query = self.search_input.text().strip()
+        if not query:
+            return None, None, []
+
         search_by = self.search_by_combo.currentText()
         split_filter = self.split_filter_combo.currentText()
-        
-        if split_filter == "全部":
-            split_filter = None
-        
-        if not query:
+        effective_split = None if split_filter == "全部" else split_filter
+        results = self.dataset_index.search(query, by=search_by, split_filter=effective_split)
+        return query, search_by, results
+
+    def do_search(self):
+        """执行搜索"""
+        query, _, results = self._run_current_search()
+        if query is None:
             QMessageBox.warning(self, "警告", "请输入搜索关键词")
             return
-        
-        # 搜索
-        results = self.dataset_index.search(query, by=search_by, split_filter=split_filter)
-        
-        # 更新结果列表
-        self.result_list.clear()
-        for task_id in results[:1000]:  # 限制显示前1000条
-            meta = self.dataset_index.get_meta(task_id)
-            if meta:
-                display_text = f"{task_id} | {meta['phrase']} | [{meta['split']}]"
-                self.result_list.addItem(display_text)
-                self.result_list.item(self.result_list.count() - 1).setData(Qt.ItemDataRole.UserRole, task_id)
-        
-        self.result_label.setText(f"搜索结果: {len(results)} 条 (显示前 {min(len(results), 1000)} 条)")
+
+        self._populate_results(results)
     
     def on_item_selected(self, item):
         """
@@ -135,6 +157,8 @@ class BrowseTab(QWidget):
 
         image_id = meta['image_id']
         split = meta['split']
+        self.current_task_id = task_id
+        self.current_split = split
 
         # P2-4: 立即显示"加载中"状态
         self.canvas.clear()
@@ -177,6 +201,103 @@ class BrowseTab(QWidget):
 
         # 恢复占位符
         self.canvas.clear()
+
+    def refresh_search_results(self, preferred_task_id: str = None) -> None:
+        """按当前搜索条件刷新结果，并尽量保留选中项。"""
+        query, _, results = self._run_current_search()
+        if query is None:
+            if preferred_task_id:
+                self.refresh_record_if_selected(preferred_task_id)
+            return
+
+        selected_task_id = preferred_task_id or self.current_task_id
+        self._populate_results(results, selected_task_id)
+
+    def refresh_result_item(self, task_id: str) -> None:
+        """刷新结果列表中的单条显示文本"""
+        meta = self.dataset_index.get_meta(task_id)
+        if not meta:
+            return
+
+        for i in range(self.result_list.count()):
+            item = self.result_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == task_id:
+                item.setText(f"{task_id} | {meta['phrase']} | [{meta['split']}]")
+                break
+
+    def refresh_record_if_selected(self, task_id: str) -> None:
+        """若当前选中记录被更新，则刷新详情显示"""
+        self.refresh_result_item(task_id)
+
+        if self.current_task_id != task_id:
+            return
+
+        meta = self.dataset_index.get_meta(task_id)
+        if not meta:
+            return
+
+        self.current_split = meta['split']
+        self.phrase_panel.clear()
+
+        if self.current_record_loader and self.current_record_loader.isRunning():
+            self.current_record_loader.cancel()
+            self.current_record_loader.wait(100)
+
+        self.current_record_loader = RecordLoader(task_id, self.current_split)
+        self.current_record_loader.record_loaded.connect(
+            lambda record: self.on_record_loaded(record, meta['image_id'])
+        )
+        self.current_record_loader.error_occurred.connect(self.on_record_error)
+        self.current_record_loader.start()
+
+    def remove_result_item(self, task_id: str) -> None:
+        """从当前结果列表中移除单条记录"""
+        for i in range(self.result_list.count()):
+            item = self.result_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == task_id:
+                self.result_list.takeItem(i)
+                break
+
+        if self.current_task_id == task_id:
+            self.current_task_id = None
+            self.current_split = None
+            self.phrase_panel.clear()
+            self.canvas.clear()
+
+    def prepend_result_item(self, task_id: str) -> None:
+        """若当前搜索结果应包含该记录，则尝试插入到列表顶部"""
+        query = self.search_input.text().strip()
+        if not query:
+            return
+
+        meta = self.dataset_index.get_meta(task_id)
+        if not meta:
+            return
+
+        search_by = self.search_by_combo.currentText()
+        split_filter = self.split_filter_combo.currentText()
+        if split_filter != "全部" and meta['split'] != split_filter:
+            return
+
+        if search_by == 'task_id' and query not in task_id:
+            return
+        if search_by == 'image_id' and not str(meta['image_id']).startswith(query):
+            return
+        if search_by == 'name' and query.lower() not in meta['name'].lower():
+            return
+        if search_by == 'phrase' and query.lower() not in meta['phrase'].lower():
+            return
+
+        for i in range(self.result_list.count()):
+            item = self.result_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == task_id:
+                self.refresh_result_item(task_id)
+                return
+
+        from PyQt6.QtWidgets import QListWidgetItem
+        item = QListWidgetItem(f"{task_id} | {meta['phrase']} | [{meta['split']}]")
+        item.setData(Qt.ItemDataRole.UserRole, task_id)
+        self.result_list.insertItem(0, item)
 
     def load_full_record(self, task_id: str, split: str) -> dict:
         """

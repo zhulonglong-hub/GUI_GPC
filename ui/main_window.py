@@ -17,6 +17,8 @@ from ui.tab_add import AddTab
 from ui.tab_delete import DeleteTab
 from ui.tab_edit import EditTab
 from ui.tab_stats import StatsTab
+from ui.tab_health import HealthTab
+from ui.tab_batch import BatchTab
 from ui.widgets.progress_dialog import ProgressDialog
 from workers.index_builder import IndexBuilder
 from config import validate_dataset_structure
@@ -141,16 +143,28 @@ class MainWindow(QMainWindow):
         self.stats_tab = StatsTab(self.dataset_index)
         self.tabs.addTab(self.stats_tab, "📊 统计")
 
+        # 健康检查Tab
+        self.health_tab = HealthTab(self.dataset_index)
+        self.tabs.addTab(self.health_tab, "🔍 健康检查")
+
+        # 批量操作Tab
+        self.batch_tab = BatchTab(self.dataset_index)
+        self.batch_tab.batch_updated.connect(self.on_batch_updated)
+        self.tabs.addTab(self.batch_tab, "🔁 批量操作")
+
         # 新增Tab
         self.add_tab = AddTab(self.dataset_index)
+        self.add_tab.record_added.connect(self.on_record_added)
         self.tabs.addTab(self.add_tab, "➕ 新增")
 
         # 删除Tab
         self.delete_tab = DeleteTab(self.dataset_index)
+        self.delete_tab.record_deleted.connect(self.on_record_deleted)
         self.tabs.addTab(self.delete_tab, "🗑️ 删除")
 
         # 编辑Tab
         self.edit_tab = EditTab(self.dataset_index)
+        self.edit_tab.record_updated.connect(self.on_record_updated)
         self.tabs.addTab(self.edit_tab, "✏️ 编辑")
     
     def update_stats_display(self):
@@ -162,6 +176,39 @@ class MainWindow(QMainWindow):
         stats_text = f"train: {stats['train']:,} | val: {stats['val']:,} | test: {stats['test']:,} | 总计: {stats['total']:,}"
         self.stats_label.setText(stats_text)
     
+    def on_record_updated(self, task_id: str):
+        """编辑成功后刷新当前可见状态"""
+        if hasattr(self, 'browse_tab'):
+            self.browse_tab.refresh_search_results(task_id)
+
+        self.status_label.setText(f"✓ 已更新记录: {task_id}")
+        self.update_stats_display()
+
+    def on_record_added(self, meta: dict):
+        """新增成功后刷新浏览列表与状态栏"""
+        if hasattr(self, 'browse_tab'):
+            self.browse_tab.prepend_result_item(meta['task_id'])
+
+        self.status_label.setText(f"✓ 已新增记录: {meta['task_id']}")
+        self.update_stats_display()
+
+    def on_record_deleted(self, task_id: str):
+        """删除成功后刷新浏览列表与状态栏"""
+        if hasattr(self, 'browse_tab'):
+            self.browse_tab.remove_result_item(task_id)
+
+        self.status_label.setText(f"✓ 已删除记录: {task_id}")
+        self.update_stats_display()
+
+    def on_batch_updated(self, task_ids: list):
+        """批量替换成功后刷新浏览列表中受影响的行"""
+        if hasattr(self, 'browse_tab'):
+            for task_id in task_ids:
+                self.browse_tab.refresh_result_item(task_id)
+
+        self.status_label.setText(f"✓ 批量替换完成，共更新 {len(task_ids)} 条记录")
+        self.update_stats_display()
+
     def refresh_index(self):
         """刷新索引"""
         reply = QMessageBox.question(

@@ -7,8 +7,10 @@ GPC Dataset Manager - JSON IO 模块
 
 import json
 import pickle
+from decimal import Decimal
 from pathlib import Path
 from typing import Generator, Optional, Callable, Dict
+import os
 import shutil
 from datetime import datetime
 from filelock import FileLock
@@ -18,6 +20,36 @@ try:
 except ImportError:
     IJSON_AVAILABLE = False
     print("警告: ijson 未安装，将使用低效的全量加载模式")
+
+
+def _json_default(value):
+    """兼容 ijson 产生的 Decimal 等类型，统一转成可序列化值。"""
+    if isinstance(value, Decimal):
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _normalize_json_value(value):
+    """递归规范化 ijson 返回的数据，避免 Decimal 落入后续写路径。"""
+    if isinstance(value, Decimal):
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+    if isinstance(value, list):
+        return [_normalize_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_json_value(item) for key, item in value.items()}
+    return value
+
+
+def _write_json_array_record(out_f, record: dict, first_record: bool) -> bool:
+    """以紧凑格式写入单条记录，兼容 Decimal。"""
+    if not first_record:
+        out_f.write(',\n')
+    json.dump(record, out_f, ensure_ascii=False, default=_json_default, separators=(',', ':'))
+    return False
 
 
 def stream_records(json_path: Path) -> Generator[dict, None, None]:
@@ -42,7 +74,7 @@ def stream_records(json_path: Path) -> Generator[dict, None, None]:
                 # ijson.items() 逐条解析数组元素
                 parser = ijson.items(f, 'item')
                 for record in parser:
-                    yield record
+                    yield _normalize_json_value(record)
         except Exception as e:
             print(f"ijson 解析失败 {json_path}: {e}，回退到全量加载")
             # 回退到旧方法
@@ -228,13 +260,213 @@ def append_record(json_path: Path, record: dict) -> bool:
 
             # 写回文件
             with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+                json.dump(data, f, ensure_ascii=False, indent=2, default=_json_default)
 
         return True
 
     except Exception as e:
         print(f"追加记录失败 {json_path}: {e}")
         return False
+
+
+def append_record_streaming(json_path: Path, record: dict) -> bool:
+    """
+    以流式复制方式追加单条记录，避免对已有 JSON 数组做全量加载。
+    """
+    lock_path = json_path.parent / f"{json_path.name}.lock"
+    lock = FileLock(str(lock_path), timeout=10)
+    tmp_path = json_path.with_suffix(json_path.suffix + '.tmp')
+
+    try:
+        with lock:
+            if not json_path.exists() or json_path.stat().st_size == 0:
+                with open(json_path, 'w', encoding='utf-8') as out_f:
+                    out_f.write('[\n')
+                    _write_json_array_record(out_f, record, True)
+                    out_f.write('\n]')
+                return True
+
+            with open(json_path, 'rb') as src_f, open(tmp_path, 'w', encoding='utf-8') as out_f:
+                content = src_f.read()
+                if not content.strip():
+                    out_f.write('[\n')
+                    _write_json_array_record(out_f, record, True)
+                    out_f.write('\n]')
+                else:
+                    end = len(content) - 1
+                    while end >= 0 and chr(content[end]).isspace():
+                        end -= 1
+
+                    if end < 0 or content[end:end + 1] != b']':
+                        raise ValueError(f'{json_path} 不是合法的 JSON 数组文件')
+
+                    body = content[:end].rstrip()
+                    if body.endswith(b'['):
+                        out_f.write(body.decode('utf-8'))
+                        out_f.write('\n')
+                        _write_json_array_record(out_f, record, True)
+                        out_f.write('\n]')
+                    else:
+                        out_f.write(body.decode('utf-8'))
+                        out_f.write(',\n')
+                        json.dump(record, out_f, ensure_ascii=False, default=_json_default, separators=(',', ':'))
+                        out_f.write('\n]')
+
+            shutil.move(str(tmp_path), str(json_path))
+            return True
+
+    except Exception as e:
+        print(f"流式追加记录失败 {json_path}: {e}")
+        if tmp_path.exists():
+            tmp_path.unlink()
+        return False
+
+
+def _find_string_bytes(haystack: bytes, needle: str) -> int:
+    target = needle.encode('utf-8')
+    start = 0
+    while True:
+        idx = haystack.find(target, start)
+        if idx == -1:
+            return -1
+        if idx == 0 or haystack[idx - 1:idx] != b'\\':
+            return idx
+        backslash_count = 0
+        cursor = idx - 1
+        while cursor >= 0 and haystack[cursor:cursor + 1] == b'\\':
+            backslash_count += 1
+            cursor -= 1
+        if backslash_count % 2 == 0:
+            return idx
+        start = idx + 1
+
+
+def _find_object_bounds(content: bytes, task_id: str) -> Optional[tuple[int, int]]:
+    marker = f'"task_id":"{task_id}"'
+    marker_pos = _find_string_bytes(content, marker)
+    if marker_pos == -1:
+        return None
+
+    in_string = False
+    escape = False
+    depth = 0
+    start = None
+
+    for i, byte in enumerate(content):
+        ch = chr(byte)
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch == '{':
+            depth += 1
+            if depth == 1 and i <= marker_pos:
+                start = i
+        elif ch == '}':
+            if depth == 1 and start is not None and i >= marker_pos:
+                return start, i + 1
+            depth -= 1
+
+    return None
+
+
+def _supports_fast_patch(json_path: Path, field_updates: dict) -> bool:
+    if not json_path.name.startswith('refer_'):
+        return False
+    allowed_fields = {'phrase', 'name', 'attributes', 'relations'}
+    return bool(field_updates) and set(field_updates).issubset(allowed_fields)
+
+
+def _patch_record_fields(record: dict, field_updates: dict) -> dict:
+    record = _normalize_json_value(record)
+    phrase_structure = record.setdefault('phrase_structure', {})
+
+    if 'phrase' in field_updates:
+        record['phrase'] = field_updates['phrase']
+    if 'name' in field_updates:
+        phrase_structure['name'] = field_updates['name']
+    if 'attributes' in field_updates:
+        phrase_structure['attributes'] = field_updates['attributes']
+    if 'relations' in field_updates:
+        phrase_structure['relation_descriptions'] = field_updates['relations']
+
+    return record
+
+
+def _fast_patch_record_fields(json_path: Path, task_id: str, field_updates: dict) -> bool:
+    lock_path = json_path.parent / f"{json_path.name}.lock"
+    lock = FileLock(str(lock_path), timeout=10)
+    backup_path = json_path.with_suffix(json_path.suffix + '.bak')
+    tmp_path = json_path.with_suffix(json_path.suffix + '.tmp')
+
+    try:
+        with lock:
+            shutil.copy2(json_path, backup_path)
+            with open(json_path, 'rb') as src_f:
+                content = src_f.read()
+
+            bounds = _find_object_bounds(content, task_id)
+            if not bounds:
+                return False
+
+            start, end = bounds
+            record = json.loads(content[start:end].decode('utf-8'))
+            updated_record = _patch_record_fields(record, field_updates)
+            updated_bytes = json.dumps(
+                updated_record,
+                ensure_ascii=False,
+                default=_json_default,
+                separators=(',', ':')
+            ).encode('utf-8')
+
+            with open(tmp_path, 'wb') as out_f:
+                out_f.write(content[:start])
+                out_f.write(updated_bytes)
+                out_f.write(content[end:])
+
+            shutil.move(str(tmp_path), str(json_path))
+            backup_path.unlink()
+            return True
+
+    except Exception as e:
+        print(f"单记录快速补丁失败 {json_path}: {e}")
+
+    if backup_path.exists():
+        shutil.copy2(backup_path, json_path)
+        backup_path.unlink()
+    if tmp_path.exists():
+        tmp_path.unlink()
+    return False
+
+
+def patch_fields_rewrite(json_path: Path,
+                         task_id: str,
+                         field_updates: dict,
+                         fallback_transform_fn: Optional[Callable[[dict], dict]] = None) -> bool:
+    """
+    针对单条记录的字段更新入口。
+
+    优先尝试方案 B+ 的单记录快路径；不满足条件或失败时回退到流式重写。
+    """
+    if _supports_fast_patch(json_path, field_updates):
+        if _fast_patch_record_fields(json_path, task_id, field_updates):
+            return True
+
+    if fallback_transform_fn is None:
+        return False
+
+    return filter_rewrite(
+        json_path,
+        keep_fn=lambda rec: True,
+        transform_fn=fallback_transform_fn
+    )
 
 
 def filter_rewrite(json_path: Path,
@@ -261,19 +493,22 @@ def filter_rewrite(json_path: Path,
         # 1. 备份原文件
         shutil.copy2(json_path, backup_path)
 
-        # 2. 流式过滤写入临时文件
-        filtered_data = []
-        for record in stream_records(json_path):
-            if keep_fn(record):
-                if transform_fn:
-                    record = transform_fn(record)
-                filtered_data.append(record)
+        # 2. P2.2-FIX: 流式写入，不累积到内存
+        with open(tmp_path, 'w', encoding='utf-8') as out_f:
+            out_f.write('[\n')
 
-        # 3. 写入临时文件
-        with open(tmp_path, 'w', encoding='utf-8') as f:
-            json.dump(filtered_data, f, ensure_ascii=False, indent=2)
+            first_record = True
+            for record in stream_records(json_path):
+                if keep_fn(record):
+                    if transform_fn:
+                        record = transform_fn(record)
 
-        # 4. 原子替换
+                    # 边读边写，不累积到内存
+                    first_record = _write_json_array_record(out_f, record, first_record)
+
+            out_f.write('\n]')
+
+        # 3. 原子替换（tmp → 原文件）
         shutil.move(str(tmp_path), str(json_path))
 
         # 5. 删除备份

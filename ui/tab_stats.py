@@ -43,13 +43,23 @@ class StatsTab(QWidget):
         # 基本统计
         stats_group = QGroupBox("基本统计")
         stats_layout = QVBoxLayout()
-        
+
         self.stats_label = QLabel()
         self.stats_label.setStyleSheet("font-size: 12px; padding: 10px;")
         stats_layout.addWidget(self.stats_label)
-        
+
         stats_group.setLayout(stats_layout)
         main_layout.addWidget(stats_group)
+
+        # 数据来源分布
+        source_group = QGroupBox("数据来源分布")
+        source_layout = QVBoxLayout()
+        self.source_text = QTextEdit()
+        self.source_text.setReadOnly(True)
+        self.source_text.setMaximumHeight(120)
+        source_layout.addWidget(self.source_text)
+        source_group.setLayout(source_layout)
+        main_layout.addWidget(source_group)
         
         # 类别分布
         category_group = QGroupBox("TOP-20 类别分布")
@@ -102,13 +112,35 @@ class StatsTab(QWidget):
         """
         
         self.stats_label.setText(stats_text.strip())
-        
+
         # 类别分布 TOP-20
         self.update_category_distribution()
-        
+
+        # 数据来源分布
+        self.update_source_distribution()
+
         # 最近操作
         self.update_recent_logs()
     
+    def update_source_distribution(self):
+        """按 data_source 字段统计各来源的 task 数量。"""
+        source_counts: dict = {}
+        for meta in self.dataset_index.main.values():
+            src = str(meta.get('data_source', '') or '') or '（未标注）'
+            source_counts[src] = source_counts.get(src, 0) + 1
+
+        if not source_counts:
+            self.source_text.setText('暂无数据')
+            return
+
+        total = sum(source_counts.values())
+        lines = []
+        for src, count in sorted(source_counts.items(), key=lambda x: -x[1]):
+            pct = count / total * 100
+            bar = '█' * int(pct / 2)
+            lines.append(f"{src:20s} {bar} {count:,} ({pct:.1f}%)")
+        self.source_text.setText('\n'.join(lines))
+
     def update_category_distribution(self):
         """更新类别分布"""
         # 统计每个类别的数量

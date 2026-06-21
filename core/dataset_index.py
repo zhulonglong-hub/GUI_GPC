@@ -74,6 +74,9 @@ class DatasetIndex:
         attributes = phrase_struct.get('attributes') or list(record.get('attributes', []) or [])
         phrase = record.get('phrase', '')
         
+        data_source = str(record.get('data_source', '') or '')
+        mask_path = str(record.get('mask_path', '') or '')
+
         # 主索引
         self.main[task_id] = {
             'task_id': task_id,
@@ -81,7 +84,9 @@ class DatasetIndex:
             'split': split,
             'name': name,
             'attributes': attributes,
-            'phrase': phrase
+            'phrase': phrase,
+            'data_source': data_source,
+            'mask_path': mask_path,
         }
         
         # image_id 倒排索引
@@ -142,6 +147,14 @@ class DatasetIndex:
             query_lower = query.lower()
             for task_id, meta in self.main.items():
                 if query_lower in meta['phrase'].lower():
+                    results.append(task_id)
+
+        elif by == 'data_source':
+            # 精确匹配或子串匹配数据来源
+            query_lower = query.lower()
+            for task_id, meta in self.main.items():
+                src = str(meta.get('data_source', '') or '').lower()
+                if query_lower in src:
                     results.append(task_id)
         
         # 应用 split 过滤

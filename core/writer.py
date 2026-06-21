@@ -128,7 +128,9 @@ def build_updated_meta(record: dict, split: str) -> dict:
         'split': split,
         'name': phrase_structure.get('name', ''),
         'attributes': phrase_structure.get('attributes', []) or [],
-        'phrase': record.get('phrase', '')
+        'phrase': record.get('phrase', ''),
+        'data_source': str(record.get('data_source', '') or ''),
+        'mask_path': str(record.get('mask_path', '') or ''),
     }
 
 

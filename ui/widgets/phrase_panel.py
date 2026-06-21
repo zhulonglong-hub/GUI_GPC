@@ -13,6 +13,7 @@ from PyQt6.QtGui import QAction
 import json
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from config import DATASET_ROOT
 
 
 class PhrasePanel(QWidget):
@@ -62,6 +63,21 @@ class PhrasePanel(QWidget):
         self._add_item(None, "image_id", str(record.get('image_id', '')))
         self._add_item(None, "split", str(record.get('split', 'N/A')))
         self._add_item(None, "phrase", str(record.get('phrase', '')))
+
+        # 数据来源
+        data_source = str(record.get('data_source', '') or '')
+        if data_source:
+            self._add_item(None, "data_source", data_source)
+
+        # 掩膜信息
+        mask_id = str(record.get('mask_id', '') or '')
+        mask_path = str(record.get('mask_path', '') or '')
+        if mask_id:
+            self._add_item(None, "mask_id", mask_id)
+        if mask_path:
+            full_mask = DATASET_ROOT / mask_path
+            exists_tag = "✅ 文件存在" if full_mask.exists() else "❌ 文件缺失"
+            self._add_item(None, "mask_path", f"{mask_path}  [{exists_tag}]")
         
         # phrase_structure
         phrase_struct = record.get('phrase_structure', {})

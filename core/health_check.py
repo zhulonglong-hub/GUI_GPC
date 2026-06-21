@@ -13,7 +13,7 @@ from typing import Callable, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import IMAGES_DIR, SPLITS, get_refer_input_json, get_refer_json
 from core.dataset_index import DatasetIndex
-from core.image_utils import resolve_image_path
+from core.image_utils import resolve_image_path, resolve_mask_path
 from core.json_io import stream_records
 
 
@@ -138,6 +138,25 @@ def check_empty_fields(index: DatasetIndex) -> list[dict]:
     return issues
 
 
+def check_missing_masks(index: DatasetIndex) -> list[dict]:
+    """检查索引中有 mask_path 字段的记录，对应掩膜文件是否存在。"""
+    issues = []
+    for task_id, meta in index.main.items():
+        mask_path = str(meta.get('mask_path', '') or '')
+        if not mask_path:
+            continue
+        resolved = resolve_mask_path(mask_path)
+        if resolved is None:
+            issues.append({
+                'task_id': task_id,
+                'split': meta.get('split', ''),
+                'image_id': str(meta.get('image_id', '') or ''),
+                'issue_type': 'missing_mask',
+                'message': f'掩膜文件不存在: {mask_path}',
+            })
+    return issues
+
+
 def summarize_issues(issues: list[dict]) -> dict[str, int]:
     """按 issue_type 汇总数量。"""
     summary: dict[str, int] = defaultdict(int)
@@ -165,6 +184,7 @@ def run_health_checks(
         'orphan_images': True,
         'refer_consistency': True,
         'empty_fields': True,
+        'missing_masks': True,
     }
     if selected_checks:
         checks.update(selected_checks)
@@ -177,6 +197,8 @@ def run_health_checks(
     if checks.get('refer_consistency'):
         total_steps += len(SPLITS)
     if checks.get('empty_fields'):
+        total_steps += 1
+    if checks.get('missing_masks'):
         total_steps += 1
     current_step = 0
 
@@ -218,6 +240,12 @@ def run_health_checks(
         results['by_check']['empty_fields'] = issues
         results['issues'].extend(issues)
         advance('检查关键字段空值')
+
+    if checks.get('missing_masks'):
+        issues = check_missing_masks(index)
+        results['by_check']['missing_masks'] = issues
+        results['issues'].extend(issues)
+        advance('检查掩膜文件缺失')
 
     results['summary'] = summarize_issues(results['issues'])
     return results

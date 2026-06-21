@@ -16,6 +16,7 @@ from matplotlib import cm
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from config import POLYGON_ALPHA, POLYGON_LINEWIDTH
+from core.image_utils import load_mask_as_rgba
 
 
 class ImageCanvas(FigureCanvasQTAgg):
@@ -115,6 +116,57 @@ class ImageCanvas(FigureCanvasQTAgg):
         color_idx = index % 20
         rgba = self.colormap(color_idx)
         return rgba[:3]
+
+    def render_with_mask_png(self, image_np: np.ndarray, mask_path: str, phrase: str = '') -> None:
+        """
+        渲染图像并叠加 PNG 掩膜（新版数据集适配）。
+
+        Args:
+            image_np: RGB 图像数组 (H, W, 3)
+            mask_path: 相对数据集根目录的掩膜路径（来自 record['mask_path']）
+            phrase: 用于图例标签的短语文本
+        """
+        self.ax.clear()
+        self.ax.imshow(image_np)
+
+        rgba = load_mask_as_rgba(mask_path)
+        if rgba is not None:
+            # 将掩膜缩放到与图像相同尺寸（若尺寸不一致）
+            img_h, img_w = image_np.shape[:2]
+            mask_h, mask_w = rgba.shape[:2]
+            if (mask_h, mask_w) != (img_h, img_w):
+                from PIL import Image as PilImage
+                pil_rgba = PilImage.fromarray(rgba, 'RGBA')
+                pil_rgba = pil_rgba.resize((img_w, img_h), PilImage.NEAREST)
+                rgba = np.array(pil_rgba)
+
+            self.ax.imshow(rgba)
+
+            # 添加图例标签
+            if phrase:
+                self.ax.text(
+                    5, 15, phrase,
+                    color='white', fontsize=9,
+                    bbox=dict(facecolor='#FF5000', alpha=0.7, edgecolor='none', pad=2),
+                    verticalalignment='top'
+                )
+        else:
+            # 掩膜文件不存在，仅显示原图并标注
+            self.ax.text(
+                0.5, 0.02, '⚠ 掩膜文件不存在',
+                ha='center', va='bottom', fontsize=9,
+                transform=self.ax.transAxes,
+                color='orange',
+                bbox=dict(facecolor='black', alpha=0.5, edgecolor='none', pad=2)
+            )
+
+        self.ax.set_xlim(0, image_np.shape[1])
+        self.ax.set_ylim(image_np.shape[0], 0)
+        self.ax.set_aspect('equal')
+        self.ax.set_xticks([])
+        self.ax.set_yticks([])
+        self.fig.tight_layout()
+        self.draw()
 
 
 if __name__ == "__main__":

@@ -32,6 +32,8 @@ CHECK_TITLES = {
     'orphan_image': '孤儿图片',
     'refer_mismatch': 'refer 一致性',
     'empty_field': '关键字段空值',
+    'missing_masks': '掩膜文件缺失',
+    'missing_mask': '掩膜文件缺失',
 }
 
 
@@ -73,6 +75,10 @@ class HealthTab(QWidget):
         self.empty_fields_checkbox = QCheckBox("关键字段空值检查")
         self.empty_fields_checkbox.setChecked(True)
         options_layout.addWidget(self.empty_fields_checkbox)
+
+        self.missing_masks_checkbox = QCheckBox("掩膜文件缺失检查（新版数据集）")
+        self.missing_masks_checkbox.setChecked(True)
+        options_layout.addWidget(self.missing_masks_checkbox)
 
         options_group.setLayout(options_layout)
         main_layout.addWidget(options_group)
@@ -157,6 +163,7 @@ class HealthTab(QWidget):
             'orphan_images': self.orphan_images_checkbox.isChecked(),
             'refer_consistency': self.refer_consistency_checkbox.isChecked(),
             'empty_fields': self.empty_fields_checkbox.isChecked(),
+            'missing_masks': self.missing_masks_checkbox.isChecked(),
         }
 
     def run_checks(self):

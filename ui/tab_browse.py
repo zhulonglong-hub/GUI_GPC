@@ -45,7 +45,7 @@ class BrowseTab(QWidget):
         search_layout.addWidget(self.search_input)
         
         self.search_by_combo = QComboBox()
-        self.search_by_combo.addItems(["task_id", "image_id", "name", "phrase"])
+        self.search_by_combo.addItems(["task_id", "image_id", "name", "phrase", "data_source"])
         search_layout.addWidget(self.search_by_combo)
         
         self.split_filter_combo = QComboBox()
@@ -185,13 +185,20 @@ class BrowseTab(QWidget):
     
     def on_record_loaded(self, record: dict, image_id: str):
         """
-        P2-4: 记录加载完成的回调
+        P2-4: 记录加载完成的回调。
+        自动检测掩膜方式：有 mask_path 则用 PNG 叠加，否则用 Polygons。
         """
         # 显示字段详情
         self.phrase_panel.display_record(record)
 
-        # 异步加载图像
-        self.load_and_render_image(image_id, [record])
+        mask_path = str(record.get('mask_path', '') or '')
+        if mask_path:
+            # 新版数据集：PNG 掩膜叠加
+            self.load_and_render_image(image_id, [], mask_path=mask_path,
+                                       phrase=record.get('phrase', ''))
+        else:
+            # V1.0 数据集：Polygons 叠加
+            self.load_and_render_image(image_id, [record])
 
     def on_record_error(self, error_msg: str):
         """
@@ -287,6 +294,8 @@ class BrowseTab(QWidget):
             return
         if search_by == 'phrase' and query.lower() not in meta['phrase'].lower():
             return
+        if search_by == 'data_source' and query.lower() not in str(meta.get('data_source', '') or '').lower():
+            return
 
         for i in range(self.result_list.count()):
             item = self.result_list.item(i)
@@ -313,17 +322,26 @@ class BrowseTab(QWidget):
 
         return None
 
-    def load_and_render_image(self, image_id: str, mask_records: list):
-        """异步加载图像并渲染"""
+    def load_and_render_image(self, image_id: str, mask_records: list,
+                               mask_path: str = '', phrase: str = ''):
+        """异步加载图像并渲染。
+
+        mask_path 非空时使用 PNG 掩膜叠加模式（新版数据集）；
+        否则使用 Polygons 模式（V1.0 数据集）。
+        """
         # 取消之前的加载任务
         if self.current_image_loader and self.current_image_loader.isRunning():
             self.current_image_loader.terminate()
 
-        # 创建新的加载任务
         self.current_image_loader = ImageLoader(image_id)
-        self.current_image_loader.image_loaded.connect(
-            lambda img: self.canvas.render(img, mask_records)
-        )
+        if mask_path:
+            self.current_image_loader.image_loaded.connect(
+                lambda img: self.canvas.render_with_mask_png(img, mask_path, phrase)
+            )
+        else:
+            self.current_image_loader.image_loaded.connect(
+                lambda img: self.canvas.render(img, mask_records)
+            )
         self.current_image_loader.error_occurred.connect(
             lambda msg: QMessageBox.warning(self, "错误", msg)
         )

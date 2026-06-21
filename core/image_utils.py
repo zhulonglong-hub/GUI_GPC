@@ -13,7 +13,7 @@ import numpy as np
 
 # 导入配置
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import IMAGES_DIR, SUPPORTED_IMAGE_EXTS, MAX_RENDER_SIZE
+from config import IMAGES_DIR, SUPPORTED_IMAGE_EXTS, MAX_RENDER_SIZE, DATASET_ROOT
 
 
 def resolve_image_path(image_id: str) -> Optional[Path]:
@@ -173,6 +173,50 @@ def validate_image_file(image_path: Path) -> Tuple[bool, Optional[str]]:
         
     except Exception as e:
         return False, f"图像文件损坏: {str(e)}"
+
+
+def resolve_mask_path(mask_path: str) -> Optional[Path]:
+    """
+    根据记录中的 mask_path 字段解析掩膜文件绝对路径。
+    mask_path 是相对数据集根目录的路径，如 "mask_json/xxx.png"。
+    """
+    if not mask_path:
+        return None
+    full = DATASET_ROOT / mask_path
+    return full if full.exists() else None
+
+
+def load_mask_as_rgba(mask_path: str,
+                      color: Tuple[int, int, int] = (255, 80, 0),
+                      alpha: float = 0.45) -> Optional[np.ndarray]:
+    """
+    加载二值掩膜 PNG 并转换为 RGBA 叠加数组。
+
+    掩膜 PNG 为单通道二值图（前景像素值 > 0）。
+    返回 RGBA uint8 数组 (H, W, 4)，可直接用 matplotlib imshow 叠加。
+
+    Args:
+        mask_path: 相对数据集根目录的掩膜路径
+        color: 叠加颜色 (R, G, B)，默认橙红色
+        alpha: 叠加透明度 0-1
+    """
+    path = resolve_mask_path(mask_path)
+    if path is None:
+        return None
+    try:
+        img = Image.open(path).convert('L')
+        mask = np.array(img)
+        foreground = mask > 0
+        h, w = mask.shape
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        rgba[foreground, 0] = color[0]
+        rgba[foreground, 1] = color[1]
+        rgba[foreground, 2] = color[2]
+        rgba[foreground, 3] = int(alpha * 255)
+        return rgba
+    except Exception as e:
+        print(f"加载掩膜失败 {path}: {e}")
+        return None
 
 
 if __name__ == "__main__":

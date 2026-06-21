@@ -10,8 +10,9 @@ import configparser
 
 # ==================== 默认路径配置 ====================
 # 注意: 以下路径需要根据实际数据集位置修改
-DATASET_ROOT = Path(r"D:\dataset\GeoPCDataset_V1.0")  # 数据集根目录
+#DATASET_ROOT = Path(r"D:\dataset\GeoPCDataset_V1.0")  # 数据集根目录
 #DATASET_ROOT = Path(r"D:\dataset\PhraseCut_Dataset")  # 数据集根目录
+DATASET_ROOT = Path(r"D:\dataset\test_pc\LoveDA_1024_test_origin")
 ANNOTATIONS_DIR = DATASET_ROOT / "annotations"
 IMAGES_DIR = DATASET_ROOT / "images"
 

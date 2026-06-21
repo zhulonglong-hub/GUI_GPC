@@ -26,9 +26,11 @@ class IndexBuilder(QThread):
         super().__init__(parent)
         self._cancelled = False
 
-        # P1-2: 缓存文件名包含数据集路径哈希，实现多数据集隔离
+        # P1-2 + 新版数据集适配: 缓存文件名包含数据集路径哈希和索引结构版本，
+        # 当索引字段结构变化时自动失效重建，避免旧缓存缺少 data_source / mask_path。
+        cache_version = 'v2'
         dataset_hash = hashlib.md5(str(DATASET_ROOT).encode()).hexdigest()[:8]
-        self.cache_path = CACHE_DIR / f"dataset_index_{dataset_hash}.pkl"
+        self.cache_path = CACHE_DIR / f"dataset_index_{dataset_hash}_{cache_version}.pkl"
     
     def run(self):
         """线程主函数"""

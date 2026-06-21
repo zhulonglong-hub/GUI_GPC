@@ -68,8 +68,10 @@ class DatasetIndex:
         # P1-6: 确保 image_id 为字符串类型（防止 JSON 中是数字）
         image_id = str(record.get('image_id', '')) if record.get('image_id') else ''
         phrase_struct = record.get('phrase_structure', {})
-        name = phrase_struct.get('name', '')
-        attributes = phrase_struct.get('attributes', [])
+        # phrase_structure.name 优先；update_entry 传入的简化 meta 没有 phrase_structure，
+        # 回退到顶层 name/attributes 字段，避免批量替换后索引里 name 变成空字符串。
+        name = phrase_struct.get('name') or str(record.get('name', '') or '')
+        attributes = phrase_struct.get('attributes') or list(record.get('attributes', []) or [])
         phrase = record.get('phrase', '')
         
         # 主索引

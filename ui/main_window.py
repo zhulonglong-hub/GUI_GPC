@@ -145,6 +145,7 @@ class MainWindow(QMainWindow):
 
         # 健康检查Tab
         self.health_tab = HealthTab(self.dataset_index)
+        self.health_tab.health_repaired.connect(self.on_health_repaired)
         self.tabs.addTab(self.health_tab, "🔍 健康检查")
 
         # 批量操作Tab
@@ -207,6 +208,16 @@ class MainWindow(QMainWindow):
                 self.browse_tab.refresh_result_item(task_id)
 
         self.status_label.setText(f"✓ 批量替换完成，共更新 {len(task_ids)} 条记录")
+        self.update_stats_display()
+
+    def on_health_repaired(self, result: dict):
+        """健康修复完成后刷新浏览列表与状态栏"""
+        deleted_task_ids = result.get('deleted_task_ids', [])
+        if hasattr(self, 'browse_tab'):
+            for task_id in deleted_task_ids:
+                self.browse_tab.remove_result_item(task_id)
+
+        self.status_label.setText("✓ 健康检查修复完成，建议重新扫描确认")
         self.update_stats_display()
 
     def refresh_index(self):

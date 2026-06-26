@@ -232,6 +232,48 @@ class BrowseTab(QWidget):
                 item.setText(f"{task_id} | {meta['phrase']} | [{meta['split']}]")
                 break
 
+    def refresh_result_item_visibility(self, task_id: str) -> None:
+        """按当前搜索条件重新判断单条记录是否应显示，并同步其显示文本。"""
+        meta = self.dataset_index.get_meta(task_id)
+        if not meta:
+            self.remove_result_item(task_id)
+            return
+
+        query = self.search_input.text().strip()
+        if not query:
+            self.refresh_result_item(task_id)
+            return
+
+        search_by = self.search_by_combo.currentText()
+        split_filter = self.split_filter_combo.currentText()
+
+        if split_filter != "全部" and meta['split'] != split_filter:
+            self.remove_result_item(task_id)
+            return
+
+        query_lower = query.lower()
+        matched = False
+        if search_by == 'task_id':
+            matched = query in task_id
+        elif search_by == 'image_id':
+            matched = str(meta['image_id']).startswith(query)
+        elif search_by == 'name':
+            matched = query_lower in meta['name'].lower()
+        elif search_by == 'phrase':
+            matched = query_lower in meta['phrase'].lower()
+        elif search_by == 'data_source':
+            matched = query_lower in str(meta.get('data_source', '') or '').lower()
+
+        if matched:
+            for i in range(self.result_list.count()):
+                item = self.result_list.item(i)
+                if item.data(Qt.ItemDataRole.UserRole) == task_id:
+                    self.refresh_result_item(task_id)
+                    return
+            self.prepend_result_item(task_id)
+        else:
+            self.remove_result_item(task_id)
+
     def refresh_record_if_selected(self, task_id: str) -> None:
         """若当前选中记录被更新，则刷新详情显示"""
         self.refresh_result_item(task_id)

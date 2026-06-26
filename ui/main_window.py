@@ -151,6 +151,7 @@ class MainWindow(QMainWindow):
         # 批量操作Tab
         self.batch_tab = BatchTab(self.dataset_index)
         self.batch_tab.batch_updated.connect(self.on_batch_updated)
+        self.batch_tab.batch_deleted.connect(self.on_batch_deleted)
         self.tabs.addTab(self.batch_tab, "🔁 批量操作")
 
         # 新增Tab
@@ -205,9 +206,21 @@ class MainWindow(QMainWindow):
         """批量替换成功后刷新浏览列表中受影响的行"""
         if hasattr(self, 'browse_tab'):
             for task_id in task_ids:
-                self.browse_tab.refresh_result_item(task_id)
+                self.browse_tab.refresh_result_item_visibility(task_id)
 
         self.status_label.setText(f"✓ 批量替换完成，共更新 {len(task_ids)} 条记录")
+        self.update_stats_display()
+
+    def on_batch_deleted(self, task_ids: list):
+        """批量删除成功后刷新浏览列表与状态栏"""
+        if hasattr(self, 'browse_tab'):
+            for task_id in task_ids:
+                self.browse_tab.remove_result_item(task_id)
+
+        if hasattr(self, 'stats_tab'):
+            self.stats_tab.refresh_stats()
+
+        self.status_label.setText(f"✓ 批量删除完成，共删除 {len(task_ids)} 条记录")
         self.update_stats_display()
 
     def on_health_repaired(self, result: dict):

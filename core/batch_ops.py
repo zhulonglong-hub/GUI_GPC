@@ -1,7 +1,7 @@
 """
 GPC Dataset Manager - 批量操作核心逻辑
 
-提供批量字段替换的 dry-run 预览与执行辅助函数。
+提供批量字段替换与按索引筛选批量删除的 dry-run 预览与执行辅助函数。
 """
 
 import sys
@@ -15,9 +15,18 @@ from core.json_io import filter_rewrite
 from core.writer import build_updated_meta, transform_record_fields
 
 
+NAME_MATCH_NONE = 'none'
+NAME_MATCH_EXACT = 'exact'
+NAME_MATCH_SUBSTR = 'substr'
+PHRASE_MATCH_NONE = 'none'
+PHRASE_MATCH_SUBSTR = 'substr'
+
 NAME_EXACT = 'name_exact'
 NAME_SUBSTR = 'name_substr'
+DELETE_BY_NAME = 'delete_by_name'
+DELETE_BY_DATA_SOURCE = 'delete_by_data_source'
 SUPPORTED_REPLACE_TYPES = {NAME_EXACT, NAME_SUBSTR}
+SUPPORTED_DELETE_FILTERS = {DELETE_BY_NAME, DELETE_BY_DATA_SOURCE}
 
 
 def build_new_name(old_name: str, replace_type: str, find_value: str, replace_value: str) -> Optional[str]:
@@ -75,6 +84,128 @@ def find_batch_targets(
             'new': new_name,
             'old_phrase': str(meta.get('phrase', '') or ''),
             'replace_type': replace_type,
+        })
+
+    return targets
+
+
+def filter_batch_targets(index, filters: dict) -> list[dict]:
+    """按组合条件从索引中过滤批量操作目标。所有已填写条件按 AND 生效。"""
+    split_filter = filters.get('split') or None
+    name_mode = filters.get('name_match_mode', NAME_MATCH_NONE)
+    name_value = str(filters.get('name_value', '') or '').strip()
+    data_source = str(filters.get('data_source', '') or '').strip()
+    phrase_mode = filters.get('phrase_match_mode', PHRASE_MATCH_NONE)
+    phrase_value = str(filters.get('phrase_value', '') or '').strip()
+
+    targets = []
+    for task_id, meta in index.main.items():
+        split = str(meta.get('split', '') or '')
+        name = str(meta.get('name', '') or '')
+        phrase = str(meta.get('phrase', '') or '')
+        source = str(meta.get('data_source', '') or '')
+
+        if split_filter and split != split_filter:
+            continue
+
+        if name_mode == NAME_MATCH_EXACT and name_value and name != name_value:
+            continue
+        if name_mode == NAME_MATCH_SUBSTR and name_value and name_value not in name:
+            continue
+
+        if data_source and source != data_source:
+            continue
+
+        if phrase_mode == PHRASE_MATCH_SUBSTR and phrase_value and phrase_value.lower() not in phrase.lower():
+            continue
+
+        targets.append({
+            'task_id': task_id,
+            'split': split,
+            'image_id': str(meta.get('image_id', '') or ''),
+            'name': name,
+            'phrase': phrase,
+            'data_source': source,
+        })
+
+    return targets
+
+
+def build_replace_targets(
+    filtered_targets: list[dict],
+    replace_type: str,
+    find_value: str,
+    replace_value: str,
+) -> list[dict]:
+    """基于已筛选目标集合，构建真正会发生修改的批量替换目标。"""
+    if replace_type not in SUPPORTED_REPLACE_TYPES:
+        raise ValueError(f'不支持的替换类型: {replace_type}')
+
+    find_value = find_value.strip()
+    replace_value = replace_value.strip()
+    if not find_value:
+        return []
+
+    targets = []
+    for meta in filtered_targets:
+        old_name = str(meta.get('name', '') or '')
+        new_name = build_new_name(old_name, replace_type, find_value, replace_value)
+        if new_name is None or new_name == old_name:
+            continue
+        targets.append({
+            'task_id': meta['task_id'],
+            'split': meta['split'],
+            'image_id': meta['image_id'],
+            'old': old_name,
+            'new': new_name,
+            'old_phrase': str(meta.get('phrase', '') or ''),
+            'replace_type': replace_type,
+            'data_source': str(meta.get('data_source', '') or ''),
+        })
+    return targets
+
+
+def build_delete_targets(filtered_targets: list[dict]) -> list[dict]:
+    """基于已筛选目标集合，构建批量删除目标。"""
+    return [dict(item) for item in filtered_targets]
+
+
+def find_delete_targets(
+    index,
+    filter_type: str,
+    filter_value: str,
+    split_filter: str | None = None,
+) -> list[dict]:
+    """dry-run 查找批量删除目标。"""
+    if filter_type not in SUPPORTED_DELETE_FILTERS:
+        raise ValueError(f'不支持的删除筛选类型: {filter_type}')
+
+    filter_value = filter_value.strip()
+    if not filter_value:
+        return []
+
+    targets = []
+    for task_id, meta in index.main.items():
+        split = meta.get('split', '')
+        if split_filter and split != split_filter:
+            continue
+
+        matched = False
+        if filter_type == DELETE_BY_NAME:
+            matched = str(meta.get('name', '') or '') == filter_value
+        elif filter_type == DELETE_BY_DATA_SOURCE:
+            matched = str(meta.get('data_source', '') or '') == filter_value
+
+        if not matched:
+            continue
+
+        targets.append({
+            'task_id': task_id,
+            'split': split,
+            'image_id': str(meta.get('image_id', '') or ''),
+            'name': str(meta.get('name', '') or ''),
+            'phrase': str(meta.get('phrase', '') or ''),
+            'data_source': str(meta.get('data_source', '') or ''),
         })
 
     return targets
